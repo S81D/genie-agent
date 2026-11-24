@@ -6,8 +6,9 @@
 #       -> marley summarize  (proves the ROOT interface actually linked)
 #
 # Proves the published MARLEY tarball works on a worker: the Spack gcc runtime
-# is ahead of /usr/lib64 on LD_LIBRARY_PATH, $MARLEY resolves the .react /
-# structure / optical_model data, both event writers work, and ifdh copies out.
+# is ahead of /usr/lib64 on LD_LIBRARY_PATH, the data search path ($MARLEY for
+# MARLEY <= 2.0.x, MARLEY_SEARCH_PATH for >= 2.1) resolves the .react /
+# structure / optical-model data, both event writers work, and ifdh copies out.
 # NOT a physics sample — small stats.
 #
 # Unlike the GENIE workers, this one WRITES ITS OWN CONFIG: `marley generate`
@@ -19,7 +20,7 @@
 #
 # Submit:
 #   python3 $SKILL/scripts/jobsub.py submit --worker grid/workers/marley_smoke.sh \
-#       -N 1 --runtype marley --tar-label marley_v2_main \
+#       -N 1 --runtype marley --tar-label marley_v2_1_0 \
 #       --memory 2000MB --expected-lifetime 2h --disk 10GB --output-suffix .root \
 #       -- -R @TAR_DIR@ -O @PNFS_OUT@ -c configs/ve40Ar_fd.js -n 200
 #

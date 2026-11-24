@@ -107,30 +107,57 @@ export ROOTSYS="$(spack_root "$SPACK_ROOT_SPEC")"
 
 # ── MARLEY ───────────────────────────────────────────────────────────────────
 export MARLEY_ROOT="${MARLEY_ROOT:-$SETUP_DIR/marley}"
-if [[ ! -r "$MARLEY_ROOT/setup_marley.sh" ]]; then
+
+# The <= 2.0.x setup_marley.sh appends with an UNGUARDED ${VAR}
+# (ROOT_INCLUDE_PATH in particular, which thisroot.sh does not set), so it
+# aborts under `set -u` — which build_marley.sh uses. Seed everything it
+# touches before sourcing it (harmless for the >= 2.1 script).
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-}"
+export ROOT_INCLUDE_PATH="${ROOT_INCLUDE_PATH:-}"
+export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}"
+
+# Two source-tree layouts. Upstream replaced the top-level setup_marley.sh by
+# set_marley_path.sh in one commit (84977a38, 2026-10-22, first released in
+# v2.1.0), so set_marley_path.sh tells them apart; a hand-made setup_marley.sh
+# shim left in a >= 2.1 tree is ignored.
+#
+#   MARLEY >= 2.1 (the public v2.1.0 payload): the build generates a relocatable
+#     build/bin/setup_marley.sh (PATH, LD_LIBRARY_PATH, ROOT_INCLUDE_PATH, all
+#     derived from its own location). MARLEY finds data next to its library via
+#     build/share/marley/data, an ABSOLUTE symlink into the build host's source
+#     tree, which is dead on a grid worker; and it ignores $MARLEY. So point
+#     MARLEY_SEARCH_PATH (searched first) at the payload's own data/.
+#   MARLEY <= 2.0.x (e.g. the private sign-fix payload, README_marley.md §5):
+#     the top-level setup_marley.sh derives $MARLEY from BASH_SOURCE, which is
+#     where those versions look for data, so it is already correct wherever RCDS
+#     unpacked the payload. It sets MARLEY and appends build/bin to PATH and
+#     build/lib to LD_LIBRARY_PATH. Unchanged from before.
+if [[ -r "$MARLEY_ROOT/set_marley_path.sh" ]]; then
+  export MARLEY="$MARLEY_ROOT"              # not read by >= 2.1; kept for logs
+  export MARLEY_SEARCH_PATH="$MARLEY_ROOT/data"
+  if [[ -r "$MARLEY_ROOT/build/bin/setup_marley.sh" ]]; then
+    source "$MARLEY_ROOT/build/bin/setup_marley.sh"
+  elif [[ -n "${MARLEY_ENV_ALLOW_UNBUILT:-}" ]]; then
+    # build_marley.sh, before `make`: gcc + ROOT are all the build needs.
+    echo "NOTE: $MARLEY_ROOT is not built yet; MARLEY itself is not on PATH." >&2
+  else
+    echo "ERROR: no build/bin/setup_marley.sh under '$MARLEY_ROOT' (MARLEY >= 2.1)." >&2
+    echo "  Run build_marley.sh first; the payload must include marley/build/bin." >&2
+    return 1
+  fi
+elif [[ -r "$MARLEY_ROOT/setup_marley.sh" ]]; then
+  source "$MARLEY_ROOT/setup_marley.sh"
+else
   echo "ERROR: no setup_marley.sh under '$MARLEY_ROOT'." >&2
   echo "  Expected the MARLEY clone at \$SETUP_DIR/marley; run build_marley.sh" >&2
   echo "  first, or export MARLEY_ROOT=<clone> before sourcing this script." >&2
   return 1
 fi
 
-# MARLEY ships its own relocatable setup script: it derives $MARLEY from
-# BASH_SOURCE, so it is already correct at whatever path RCDS unpacked the
-# payload to — no GENIEBASE-style override needed. It sets MARLEY, and appends
-# build/bin to PATH and build/lib to LD_LIBRARY_PATH.
-#
-# setup_marley.sh appends with an UNGUARDED ${VAR} (ROOT_INCLUDE_PATH in
-# particular, which thisroot.sh does not set), so it aborts under `set -u` —
-# which build_marley.sh uses. Seed everything it touches before sourcing it.
-export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-}"
-export ROOT_INCLUDE_PATH="${ROOT_INCLUDE_PATH:-}"
-export CMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-}"
-
-source "$MARLEY_ROOT/setup_marley.sh"
-
-# ...but it APPENDS where GENIE's setup_env.sh prepends. Harmless for MARLEY's
-# own build/lib, yet it means the Spack gcc runtime must be pushed to the front
+# ...but the <= 2.0.x script APPENDS where GENIE's setup_env.sh prepends (the
+# >= 2.1 one prepends). Harmless for MARLEY's own build/lib, yet either way the
+# Spack gcc runtime must be pushed to the front
 # by hand: otherwise the worker's /usr/lib64/libstdc++ is found first and
 # `marley` dies on GLIBCXX_3.4.30, since it is built %gcc@12.5.0 against ROOT.
 export PATH="$GCC_PATH/bin:$PATH"
@@ -141,5 +168,6 @@ export CXX="${CXX:-$GCC_PATH/bin/g++}"
 
 echo "MARLEY=$MARLEY"
 echo "MARLEY_ROOT=$MARLEY_ROOT"
+echo "MARLEY_SEARCH_PATH=${MARLEY_SEARCH_PATH:-<unset>}"
 echo "ROOTSYS=$ROOTSYS"
 echo "GCC_PATH=$GCC_PATH"

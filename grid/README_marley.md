@@ -29,10 +29,12 @@ sibling of the GENIE base:
 │       ├── workers/marley_smoke.sh
 │       └── jobsub-lite/
 └── MARLEY/                       $MARLEYBASE
-    ├── marley/                   git clone -b main https://github.com/MARLEY-MC/marley.git
+    ├── marley/                   clone of https://github.com/MARLEY-MC/marley.git,
+    │                             detached at $MARLEY_REF (default tag v2.1.0)
     ├── setup_marley_env.sh       copied from grid/build/  (also in the tarball)
     ├── configs/                  copied from grid/        (also in the tarball)
-    ├── MARLEY_COMMIT.txt         the exact main SHA
+    ├── MARLEY_REF.txt            the ref asked for (v2.1.0)
+    ├── MARLEY_COMMIT.txt         the exact SHA (8813f234… for v2.1.0)
     ├── spack_loaded.txt
     └── build.log
 ```
@@ -101,8 +103,11 @@ about matching the ABI of the ROOT that MARLEY links, whose libstdc++ needs
 bash grid/build/build_marley.sh          # minutes, not the 30-60 GENIE takes
 ```
 
-It clones `marley/` if absent, copies `setup_marley_env.sh` + `configs/` up to
-`$MARLEYBASE` (so both land at the tarball top level), records the SHA to
+It clones `marley/` if absent, fetches tags and checks out **`MARLEY_REF`**
+(default **`v2.1.0`**, the release that "MARLEY v2" means; the script aborts if
+that tag is not at `8813f234f496cfcb6fa37311474c4d078b83b0a8`). It copies
+`setup_marley_env.sh` + `configs/` up to `$MARLEYBASE` (so both land at the
+tarball top level), records the ref and SHA to `MARLEY_REF.txt` /
 `MARLEY_COMMIT.txt`, and runs:
 
 ```sh
@@ -114,9 +119,25 @@ when `root-config` is on `PATH`, which `thisroot.sh` guarantees.
 `IGNORE_GSL`/`IGNORE_HEPMC3` select MARLEY's bundled copies so the payload
 carries no extra Spack runtime deps.
 
-Record the SHA in the campaign log; to freeze a production campaign check that
-SHA out explicitly (`cd $MARLEYBASE/marley && git checkout <sha>`) and rebuild
-with `CLEAN=1`.
+The tag already freezes a campaign; record `MARLEY_REF.txt` and
+`MARLEY_COMMIT.txt` in the campaign log. Another release, branch or commit:
+`MARLEY_REF=<tag|branch|sha> bash grid/build/build_marley.sh` (a branch means
+`origin/<branch>`'s tip). The script refuses a `marley/` that is not a clone of
+the public repo or has edited tracked files, and forces `CLEAN=1` whenever
+`build/` was not built from the checked-out commit (marker
+`build/.built_commit`, written only after a successful build, like the two
+`.txt` records), because the top-level `make` never re-runs cmake, so the
+version baked into `marley` and every HepMC3 header would go stale.
+
+**MARLEY ≥ 2.1 layout** (upstream 84977a38, 2026-10-22; the 2026-09 `main`
+payload predates it). The top-level `setup_marley.sh` is gone: the build
+generates a relocatable `build/bin/setup_marley.sh`, `$MARLEY` is no longer
+read, and data are found via `build/share/marley/data`, an absolute symlink
+into the GPVM tree that is dead on a worker. `setup_marley_env.sh` handles both
+layouts (it keys on `set_marley_path.sh`); for ≥ 2.1 it sources the generated
+script and exports `MARLEY_SEARCH_PATH=$MARLEY_ROOT/data`, which MARLEY searches
+first. Expect one harmless worker-log warning that the `build/share/marley/data`
+directory "will not be used". The ≤ 2.0.x path (§5) is unchanged.
 
 Build hiccups:
 - **No cmake, or too old.** The top-level `Makefile` auto-detects CMake and
@@ -167,16 +188,17 @@ python3 $SKILL/scripts/jobsub.py tarball build --build-dir "$MARLEYBASE" \
     --include marley setup_marley_env.sh configs \
     --exclude-component src --exclude-component .git --exclude-component CMakeFiles \
     --exclude-suffix .o --exclude-suffix .d --exclude-suffix .a \
-    --name-prefix marley_v2_main
-#  keeps marley/{build/bin,build/lib,data,examples,include,setup_marley.sh}.
-#  Measured 43.3 MB (vs GENIE's 428 MB) — src/, .git and CMakeFiles dropped —
-#  so no --background needed.
+    --name-prefix marley_v2_1_0
+#  keeps marley/{build/bin (incl. the generated setup_marley.sh),build/lib,data,
+#  examples,include}. Measured 43.3 MB for the 2026-09 main payload (vs GENIE's
+#  428 MB) — src/, .git and CMakeFiles dropped — so no --background needed.
+#  (Label was marley_v2_main for that payload; v2.1.0 is a new tarball.)
 
 python3 $SKILL/scripts/jobsub.py publish \
-    --tarball .jobsub/tarballs/marley_v2_main_*.tar --label marley_v2_main
+    --tarball .jobsub/tarballs/marley_v2_1_0_*.tar --label marley_v2_1_0
 #  runs ONE sentinel grid job to discover the CVMFS path — ~5-20 min.
 
-python3 $SKILL/scripts/jobsub.py verify --label marley_v2_main     # -> ok
+python3 $SKILL/scripts/jobsub.py verify --label marley_v2_1_0      # -> ok
 python3 $SKILL/scripts/jobsub.py labels                            # both labels
 ```
 
@@ -198,7 +220,7 @@ name against `$CONDOR_DIR_INPUT` instead — see §6.)
 
 ```sh
 python3 $SKILL/scripts/jobsub.py submit --worker grid/workers/marley_smoke.sh \
-    -N 1 --runtype marley --tar-label marley_v2_main \
+    -N 1 --runtype marley --tar-label marley_v2_1_0 \
     --memory 2000MB --expected-lifetime 2h --disk 10GB --output-suffix .root \
     -- -R @TAR_DIR@ -O @PNFS_OUT@ -c configs/ve40Ar_fd.js -n 200
 #  --dry-run first.
@@ -289,12 +311,13 @@ pinned to `/Users/…` and homebrew ROOT, which would break the Linux build. It
 is regenerated output, not a physics input. Everything else ships intact,
 including `data/react/crpa/`.
 
-`build_marley.sh` is reused **unchanged** — it skips the clone when `marley/`
-already exists, so the rsync'd tree is picked up as-is:
+`build_marley.sh` is reused with **`MARLEY_REF=keep`**, which builds the rsync'd
+tree as-is (no clone, fetch or checkout). Without it the script refuses, since
+this tree's origin is `marley-private`, not the public repo:
 
 ```sh
 export MARLEYBASE=/exp/dune/app/users/doran/grid/MARLEY_SIGNFIX
-bash grid/build/build_marley.sh
+MARLEY_REF=keep bash grid/build/build_marley.sh
 source $MARLEYBASE/setup_marley_env.sh
 marley version          # expect 9a6fff0-dirty (no .VERSION file -> git short SHA)
 ```
@@ -372,8 +395,13 @@ multisim weights `MultisimVar_0 … MultisimVar_99` beside `CV`. Config:
 
 The §5 sign-fix tarball is reused **unchanged**. Commit 9a6fff0 flips the sign
 of `vTprime` in `DiscreteNuclearReaction::diff_xs`, which also serves the ⁴⁰Ar
-discrete channel — public `main` does not carry that fix. Reuse also means the
-Ar sample comes from the bit-identical build behind the I/Pb samples.
+discrete channel — public `main` did not carry that fix when this sample was
+made (2026-09). Reuse also means the Ar sample comes from the bit-identical
+build behind the I/Pb samples. (Public v2.1.0 now contains the same fix,
+a6a3b52. For ⁴⁰Ar νe CC it reproduces this payload's flux-averaged σ and events
+exactly, except the de-excitation vertex times, which v2.1.0 samples from the
+level's total width: `analyses/MARLEY_DEV/v2.1.0_vs_v2.0.1_smoke_20261111/`
+in `~/hep`.)
 
 The tarball's `configs/` predates this config, so rather than rebuild and
 re-stage, the config rides as a **second `-f`** and is passed to the worker as a
